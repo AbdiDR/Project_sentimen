@@ -1,0 +1,333 @@
+---
+title: "Project"
+output: html_document
+date: "2022-11-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Mengambil library yang dibutuhkan
+
+```{r}
+library(tm)        # data cleaning
+library(tidyr)     # data tidying
+library(here)      # save dataset
+library(dplyr)     # manipulasi data
+library(ggplot2)   # visualisasi data
+library(wordcloud2) # menampilkan wordcloud
+library(syuzhet)   # membaca fungsi get_nrc
+library(caret)     # klasifikasi data
+library(markdown)
+library(DT)
+library(vroom)     #load data
+library(shiny)     # tampilan GUI
+library(vader)
+library(readxl)
+library(gmodels)
+
+
+# memuat dan menampilkan dataset
+datascience <- read.csv(here("tripadvisor_hotel_reviews.csv"))
+```
+
+Data cleaning
+```{r}
+# data cleaning
+komentar <- datascience$Review
+
+komentar1 <- Corpus(VectorSource(komentar))#membuat bahasa alami dengan corpus
+
+#fungsi menghilangkan http
+removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+reviewclean <- tm_map(komentar1, removeURL)
+
+#fungsi menghilangkan NewLine
+removeNL <- function(y) gsub("\n", " ", y)
+reviewclean <- tm_map(reviewclean, removeNL)
+
+#fungsi menghilangkan koma
+replacecomma <- function(y) gsub(",", "", y)
+reviewclean <- tm_map(reviewclean, replacecomma)
+
+#fungsi mengubah ; dengan space
+removetitikkoma <- function(y) gsub(";", " ", y)
+reviewclean <- tm_map(reviewclean, removetitikkoma)
+
+reviewclean <- tm_map(reviewclean, removePunctuation) #menggunakan fungsi menghilangkan tandabaca
+reviewclean <- tm_map(reviewclean, tolower) #menggunakan fungsi untuk mengubah data ke lowercase
+
+dataframe <- data.frame(Reviews=unlist(sapply(reviewclean, `[`)), stringsAsFactors=F) #membuat datadrame dari hasil cleaning
+View(dataframe) 
+write.csv(dataframe, file = "dataclean.csv") #data frame dibuat ke CSV
+
+```
+
+Visual hasil sentiemen
+```{r}
+
+#membaca file yang sudah dilakukan cleaning
+prosesdata <- read.csv("dataclean.csv", stringsAsFactors = FALSE)
+
+#mengubah kolom review menjadi karakter
+review <- as.character(prosesdata$Reviews)
+
+#mendapatkan hasil sentimen dengan bahasa inggris dengan format lowercase
+s <- get_nrc_sentiment(review, cl = NULL, language = "english", lowercase =TRUE)
+
+# barplot mendapatkan 10 emosi hasil sentimen analisis
+datanew <- barplot(colSums(s), col = rainbow(10), xlab = 'emotion', ylab = 'count', main = 'Sentiment Analysis')
+
+```
+
+
+```{r}
+# Mengklasifikasikan sentimen positif, negatif dataclean + ratingnya
+dataclean <- read.csv("dataclean.csv")
+datacleanfix <- data.frame(review = dataclean$Reviews, rating = datascience$Rating)
+
+
+#Kelas Baru Positif dan Negatif
+datanya <- datacleanfix %>% mutate(kelas = ifelse(rating>3, "Positif", "Negatif"))
+write.csv(datanya, file = "datalabelledfix.csv")
+```
+
+
+```{r}
+#Menampilkan 5 kata yang sering muncul
+dc <- read.csv("dataclean.csv", stringsAsFactors = FALSE)
+data = as.factor(dc$Reviews)
+corpus = Corpus(VectorSource(data))
+tdm <- TermDocumentMatrix(corpus)
+tdm <- removeSparseTerms(tdm, sparse = 0.98)
+tdm <- as.matrix(tdm)
+w = sort(rowSums(tdm), decreasing = T)
+barplot(w[1:5],
+        las=2, xlab = 'word', ylab = 'count',
+        main = "Frequency of Words",
+        col= rainbow(20))
+```
+
+```{r}
+komen <- dc$Reviews
+#wordcloud
+komenCorpus <- Corpus(VectorSource(komen))
+{
+  dtm <- TermDocumentMatrix(komenCorpus)
+  m <- as.matrix(dtm)
+  v <- sort(rowSums(m), decreasing = TRUE)
+}
+Freq <- data.frame(word = names(v), freg =v)
+wordcloud2(Freq, size=1.0, color='random-light', backgroundColor="dark")
+
+```
+
+```{r}
+library(wordcloud) 
+library(ggplot2)
+#word cloid berdasarkan hasil kelas sentimen
+sen_label <- read.csv("datalabelledfix.csv", stringsAsFactors = FALSE)
+positive = subset(sen_label, kelas == "Positif")
+wordcloud(positive$review, max.words = 100, colors = "blue")
+negative = subset(sen_label, kelas == "Negatif")
+wordcloud(negative$review, max.words = 100, colors = "purple")
+```
+
+```{r}
+hasil <- as.factor(sen_label$kelas)
+plot(hasil)
+```
+
+Mengambil data yang sudah ada labelnya
+```{r}
+labelled <- read.csv("datalabelledfix.csv")
+```
+
+Mengubah ke factor
+```{r}
+library(tidymodels)
+library(gmodels)
+library(e1071)
+
+labelled$kelas <- factor(labelled$kelas)
+table(labelled$kelas)
+```
+
+kolom review diubah menjadi corpus dan pengmbilan data train dan test 80% sekaligus mengambil labelnya
+```{r}
+# Create a corpus from the sentences
+labelled_corpus <- VCorpus(VectorSource(labelled$review))
+
+# create a document-term sparse matrix directly from the corpus
+labelled_dtm <- DocumentTermMatrix(labelled_corpus, control = list(
+  tolower = TRUE,
+  removeNumbers = TRUE,
+  stopwords = TRUE,
+  removePunctuation = TRUE,
+  stemming = TRUE
+))
+
+# creating training and test datasets
+labelled_dtm_train <- labelled_dtm[1:400, ]
+labelled_dtm_test  <- labelled_dtm[401:500, ]
+
+# also save the labels
+labelled_train_labels <- labelled[1:400, ]$kelas
+labelled_test_labels  <- labelled[401:500, ]$kelas
+
+# check that the proportion of spam is similar
+prop.table(table(labelled_train_labels))
+```
+
+```{r}
+prop.table(table(labelled_test_labels))
+```
+
+Membuat random sample
+```{r}
+# Create random samples
+set.seed(123)
+train_index <- sample(500, 400)
+
+labelled_train <- labelled[train_index, ]
+labelled_test  <- labelled[-train_index, ]
+
+# check the proportion of class variable
+prop.table(table(labelled_train$kelas))
+```
+
+```{r}
+prop.table(table(labelled_test$kelas))
+```
+
+train dan test review dijadikan corpus
+```{r}
+train_corpus <- VCorpus(VectorSource(labelled_train$review))
+test_corpus <- VCorpus(VectorSource(labelled_test$review))
+```
+
+cleaning lagi
+```{r}
+# create a document-term sparse matrix directly for train and test
+train_dtm <- DocumentTermMatrix(train_corpus, control = list(
+  tolower = TRUE,
+  removeNumbers = TRUE,
+  stopwords = TRUE,
+  removePunctuation = TRUE,
+  stemming = TRUE
+))
+
+test_dtm <- DocumentTermMatrix(test_corpus, control = list(
+  tolower = TRUE,
+  removeNumbers = TRUE,
+  stopwords = TRUE,
+  removePunctuation = TRUE,
+  stemming = TRUE
+))
+
+train_dtm
+```
+
+```{r}
+test_dtm
+```
+
+
+```{r}
+# create function to convert counts to a factor
+convert_counts <- function(x) {
+  x <- ifelse(x > 0, "Yes", "No")
+}
+
+# apply() convert_counts() to columns of train/test data
+train_dtm_binary <- apply(train_dtm, MARGIN = 2, convert_counts)
+test_dtm_binary  <- apply(test_dtm, MARGIN = 2, convert_counts)
+```
+
+
+training model
+```{r}
+labelled_classifier <- naiveBayes(as.matrix(train_dtm_binary), labelled_train$kelas)
+```
+
+evaluasi model
+```{r}
+labelled_test_pred <- predict(labelled_classifier, as.matrix(test_dtm_binary))
+head(labelled_test_pred)
+```
+
+hasil akurasinya
+```{r}
+conf2 <- confusionMatrix(labelled_test_pred, labelled_test$kelas)
+conf2$overall['Accuracy']
+```
+
+hasil confusion matrix
+```{r}
+CrossTable(labelled_test_pred, labelled_test$kelas,
+           prop.chisq = FALSE, prop.t = FALSE, prop.r = FALSE,
+           dnn = c('predicted', 'actual'))
+```
+
+
+```{r}
+
+data <- vroom("dataclean.csv")
+
+ui <- fluidPage(
+  titlePanel("HASIL ANALISIS SENTIMEN REVIEW HOTEL PADA TRIP ADVISOR"),
+    mainPanel(
+      tabsetPanel(type = "tabs",
+                  tabPanel("Data", DT::dataTableOutput('tbl')),
+                  tabPanel("Sentiment 10 emotion", plotOutput("barplot")),
+                  tabPanel("Word cloud", wordcloud2Output("Wordcloud")),
+                  tabPanel("Frequenly word", plotOutput("freqwords")),
+                  tabPanel("Klasifikasi sentiment", DT::dataTableOutput('sentiment')),
+                  tabPanel("plot sentiment class", plotOutput("class")),
+)
+)
+)
+
+server <- function(input,output){
+  
+  output$tbl = DT::renderDataTable({
+    datatabel <-read.csv("dataclean.csv",stringsAsFactors = FALSE)
+    DT::datatable(datatabel, options= list(lengthChange = FALSE))
+  })
+  
+  output$barplot <- renderPlot({
+    barplot( 
+        colSums(s),
+        col=rainbow(10),
+        xlab='emotion',
+        ylab='count',
+        main='Sentiment Analysis Hotel reviews')
+  })
+     
+  output$Wordcloud <- renderWordcloud2({
+    wordcloud2(Freq, size=1.0, color='random-light', backgroundColor="dark")
+
+  })
+  
+  output$sentiment <- DT::renderDataTable({
+    DT::datatable(sen_label, options= list(lengthChange = FALSE))
+
+  })
+  
+  output$freqwords<- renderPlot({
+    barplot(w[1:5],
+        las=2, xlab = 'word', ylab = 'count',
+        main = "Frequency of Words",
+        col= rainbow(20))
+  })
+  
+  output$class <- renderPlot({
+    plot(hasil)
+  })
+  
+}
+
+
+shinyApp(ui = ui, server = server)
+
+```
